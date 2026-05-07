@@ -1,0 +1,26 @@
+{
+  "name": "@phoenix/database",
+  "version": "0.0.1",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.7.0",
+    "drizzle-orm": "^0.29.0",
+    "drizzle-kit": "^0.20.0",
+    "dotenv": "^16.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  }
+}

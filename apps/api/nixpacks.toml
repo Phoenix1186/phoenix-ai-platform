@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ["nodejs", "npm"]
+
+[phases.build]
+cmds = [
+    "npm install",
+    "npm run build --workspace=@phoenix/shared",
+    "npm run build --workspace=@phoenix/database",
+    "npm run build --workspace=@phoenix/config",
+    "npm run build --workspace=@phoenix/api"
+]
+
+[start]
+cmd = "cd apps/api && node dist/index.js"
