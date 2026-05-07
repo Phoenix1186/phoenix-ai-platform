@@ -11,7 +11,7 @@
     "db:push": "turbo run db:push",
     "db:studio": "turbo run db:studio",
     "clean": "turbo run clean && rm -rf node_modules .turbo",
-    "format": "prettier --write "**/*.{ts,tsx,js,jsx,json,md}""
+    "format": "prettier --write '**/*.{ts,tsx,js,jsx,json,md}'"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
