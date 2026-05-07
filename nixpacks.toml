@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs", "npm"]
+
+[phases.build]
+cmds = [
+    "npm install",
+    "npx turbo run build --filter=@phoenix/api..."
+]
+
+[start]
+cmd = "npm run start --workspace=@phoenix/api"
