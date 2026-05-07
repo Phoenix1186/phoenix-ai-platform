@@ -10,18 +10,26 @@ import { generateId, estimateTokens } from "@phoenix/shared";
 import { LLMService, SELF_HOSTED_MODELS, TOKEN_COSTS } from "../services/llm";
 import { PaystackService } from "../services/paystack";
 
-const apiV1 = new Hono();
+const apiV1 = new Hono<{ Variables: ContextVariables }>();
 
 // Auth middleware
+import { User, Session } from "lucia";
+
+type ContextVariables = {
+  user: User;
+  session: Session;
+  apiKeyId?: string;
+};
+
 const authMiddleware = async (c: any, next: any) => {
   const sessionId = lucia.readSessionCookie(c.req.header("cookie") || "");
   if (!sessionId) return c.json({ error: "Unauthorized" }, 401);
 
   const { session, user } = await lucia.validateSession(sessionId);
-  if (!session) return c.json({ error: "Unauthorized" }, 401);
+  if (!session || !user) return c.json({ error: "Unauthorized" }, 401);
 
-  c.set("user", user);
-  c.set("session", session);
+  c.set("user", user as User);
+  c.set("session", session as Session);
   return next();
 };
 
@@ -39,9 +47,9 @@ const apiKeyMiddleware = async (c: any, next: any) => {
     with: { user: true },
   });
 
-  if (!keyRecord) return c.json({ error: "Invalid API key" }, 401);
+  if (!keyRecord || !keyRecord.user) return c.json({ error: "Invalid API key" }, 401);
 
-  c.set("user", keyRecord.user);
+  c.set("user", keyRecord.user as User);
   c.set("apiKeyId", keyRecord.id);
 
   await db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, keyRecord.id));
@@ -97,12 +105,12 @@ apiV1.post("/models/pull", authMiddleware, zValidator("json", z.object({
 
 // ============ USER ============
 apiV1.get("/user", authMiddleware, async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   return c.json({ user });
 });
 
 apiV1.get("/user/stats", authMiddleware, async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const totalRequests = await db.select({ count: sql<number>`count(*)` }).from(usageLogs).where(eq(usageLogs.userId, user.id));
   const totalTokens = await db.select({ sum: sql<number>`sum(total_tokens)` }).from(usageLogs).where(eq(usageLogs.userId, user.id));
   const recentUsage = await db.select().from(usageLogs).where(eq(usageLogs.userId, user.id)).orderBy(desc(usageLogs.createdAt)).limit(10);
@@ -116,7 +124,7 @@ apiV1.get("/user/stats", authMiddleware, async (c) => {
 
 // ============ API KEYS ============
 apiV1.get("/keys", authMiddleware, async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const keys = await db.select().from(apiKeys).where(eq(apiKeys.userId, user.id)).orderBy(desc(apiKeys.createdAt));
   return c.json({ keys });
 });
@@ -124,7 +132,7 @@ apiV1.get("/keys", authMiddleware, async (c) => {
 apiV1.post("/keys", authMiddleware, zValidator("json", z.object({
   name: z.string().min(1).max(100),
 })), async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const { name } = c.req.valid("json");
 
   const key = generateId().replace(/-/g, "");
@@ -142,7 +150,7 @@ apiV1.post("/keys", authMiddleware, zValidator("json", z.object({
 });
 
 apiV1.delete("/keys/:id", authMiddleware, async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const keyId = c.req.param("id");
   await db.delete(apiKeys).where(and(eq(apiKeys.id, keyId), eq(apiKeys.userId, user.id)));
   return c.json({ success: true });
@@ -150,7 +158,7 @@ apiV1.delete("/keys/:id", authMiddleware, async (c) => {
 
 // ============ CONVERSATIONS ============
 apiV1.get("/conversations", authMiddleware, async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const convs = await db.select().from(conversations)
     .where(eq(conversations.userId, user.id))
     .orderBy(desc(conversations.updatedAt));
@@ -161,7 +169,7 @@ apiV1.post("/conversations", authMiddleware, zValidator("json", z.object({
   title: z.string().optional(),
   model: z.string(),
 })), async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const { title, model } = c.req.valid("json");
 
   const convId = generateId();
@@ -177,7 +185,7 @@ apiV1.post("/conversations", authMiddleware, zValidator("json", z.object({
 });
 
 apiV1.get("/conversations/:id", authMiddleware, async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const convId = c.req.param("id");
 
   const conv = await db.query.conversations.findFirst({
@@ -194,7 +202,7 @@ apiV1.get("/conversations/:id", authMiddleware, async (c) => {
 });
 
 apiV1.delete("/conversations/:id", authMiddleware, async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const convId = c.req.param("id");
   await db.delete(conversations).where(and(eq(conversations.id, convId), eq(conversations.userId, user.id)));
   return c.json({ success: true });
@@ -204,7 +212,7 @@ apiV1.patch("/conversations/:id", authMiddleware, zValidator("json", z.object({
   title: z.string().optional(),
   isPinned: z.boolean().optional(),
 })), async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const convId = c.req.param("id");
   const data = c.req.valid("json");
 
@@ -219,7 +227,7 @@ apiV1.patch("/conversations/:id", authMiddleware, zValidator("json", z.object({
 apiV1.post("/conversations/:id/messages", authMiddleware, zValidator("json", z.object({
   content: z.string().min(1),
 })), async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const convId = c.req.param("id");
   const { content } = c.req.valid("json");
 
@@ -279,6 +287,7 @@ apiV1.post("/conversations/:id/messages", authMiddleware, zValidator("json", z.o
     }
 
     await db.insert(usageLogs).values({
+      id: generateId(),
       userId: user.id,
       model: conv.model,
       provider: "phoenix",
@@ -306,6 +315,7 @@ apiV1.post("/conversations/:id/messages", authMiddleware, zValidator("json", z.o
     });
   } catch (error: any) {
     await db.insert(usageLogs).values({
+      id: generateId(),
       userId: user.id,
       model: conv.model,
       provider: "phoenix",
@@ -335,7 +345,7 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
   frequency_penalty: z.number().optional(),
   presence_penalty: z.number().optional(),
 })), async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const body = c.req.valid("json");
   const apiKeyId = c.get("apiKeyId");
 
@@ -363,7 +373,7 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
       }
 
       return stream(c, async (stream) => {
-        const reader = streamBody.getReader();
+        const reader = (streamBody as ReadableStream).getReader();
         const decoder = new TextDecoder();
         let fullContent = "";
 
@@ -417,8 +427,9 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
         }
 
         await db.insert(usageLogs).values({
+          id: generateId(),
           userId: user.id,
-          apiKeyId,
+          apiKeyId: apiKeyId || null,
           model,
           provider: "phoenix",
           promptTokens,
@@ -449,8 +460,9 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
     }
 
     await db.insert(usageLogs).values({
+      id: generateId(),
       userId: user.id,
-      apiKeyId,
+      apiKeyId: apiKeyId || null,
       model,
       provider: "phoenix",
       promptTokens,
@@ -479,11 +491,12 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
     });
   } catch (error: any) {
     await db.insert(usageLogs).values({
+      id: generateId(),
       userId: user.id,
-      apiKeyId,
+      apiKeyId: apiKeyId || null,
       model,
       provider: "phoenix",
-      promptTokens: body.messages.reduce((acc, m) => acc + estimateTokens(m.content), 0),
+      promptTokens: body.messages.reduce((acc, m) => acc + (m.content ? estimateTokens(m.content) : 0), 0),
       completionTokens: 0,
       totalTokens: 0,
       creditsUsed: 0,
@@ -527,7 +540,7 @@ apiV1.post("/embeddings", apiKeyMiddleware, zValidator("json", z.object({
 apiV1.post("/payments/initialize", authMiddleware, zValidator("json", z.object({
   packageId: z.string(),
 })), async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const { packageId } = c.req.valid("json");
 
   const { CREDIT_PACKAGES } = await import("@phoenix/shared");
@@ -557,7 +570,7 @@ apiV1.post("/payments/initialize", authMiddleware, zValidator("json", z.object({
 });
 
 apiV1.get("/payments", authMiddleware, async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   const pays = await db.select().from(payments)
     .where(eq(payments.userId, user.id))
     .orderBy(desc(payments.createdAt));
@@ -566,7 +579,7 @@ apiV1.get("/payments", authMiddleware, async (c) => {
 
 // ============ CREDITS ============
 apiV1.get("/credits", authMiddleware, async (c) => {
-  const user = c.get("user");
+  const user = c.get("user") as User;
   return c.json({ credits: user.credits, tier: user.tier });
 });
 
