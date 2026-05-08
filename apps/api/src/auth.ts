@@ -10,7 +10,7 @@ import { db } from "@phoenix/database";
 import { users, sessions } from "@phoenix/database";
 import { generateId, generateApiKey } from "@phoenix/shared";
 
-const adapter = new DrizzlePostgreSQLAdapter(db as any, sessions, users);
+const adapter = new DrizzlePostgreSQLAdapter(db as any, sessions as any, users as any);
 
 export const lucia = new Lucia(adapter, {
   sessionCookie: {
