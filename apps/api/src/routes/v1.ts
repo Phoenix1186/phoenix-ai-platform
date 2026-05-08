@@ -254,27 +254,32 @@ apiV1.post("/conversations/:id/messages", authMiddleware, zValidator("json", z.o
     .orderBy(messages.createdAt);
 
   const llmService = new LLMService();
-  const startTime = Date.now();
+    const startTime = Date.now();
 
-  try {
-    const response = await llmService.chat(conv.model, history, {
-      temperature: 0.7,
-    });
-    const latency = Date.now() - startTime;
+    try {
+      const chatResult = await llmService.chat(conv.model, history, {
+        temperature: 0.7,
+      });
 
-    const assistantTokens = response.usage?.completion_tokens || estimateTokens(response.content);
-    const totalTokens = response.usage?.total_tokens || (estimateTokens(content) + assistantTokens);
-    const creditsUsed = Math.ceil(totalTokens * (TOKEN_COSTS[conv.model]?.output || 0.2));
+      if (!chatResult || !('usage' in chatResult)) {
+        throw new Error("Failed to generate response");
+      }
 
-    const assistantMsgId = generateId();
-    await db.insert(messages).values({
-      id: assistantMsgId,
-      conversationId: convId,
-      role: "assistant",
-      content: response.content,
-      tokens: assistantTokens,
-      model: conv.model,
-    });
+      const latency = Date.now() - startTime;
+
+      const assistantTokens = chatResult.usage.completion_tokens || estimateTokens(chatResult.content);
+      const totalTokens = chatResult.usage.total_tokens || (estimateTokens(content) + assistantTokens);
+      const creditsUsed = Math.ceil(totalTokens * (TOKEN_COSTS[conv.model]?.output || 0.2));
+
+      const assistantMsgId = generateId();
+      await db.insert(messages).values({
+        id: assistantMsgId,
+        conversationId: convId,
+        role: "assistant",
+        content: chatResult.content,
+        tokens: assistantTokens,
+        model: conv.model,
+      });
 
     await db.update(conversations)
       .set({ updatedAt: new Date() })
@@ -291,7 +296,7 @@ apiV1.post("/conversations/:id/messages", authMiddleware, zValidator("json", z.o
       userId: user.id,
       model: conv.model,
       provider: "phoenix",
-      promptTokens: response.usage?.prompt_tokens || estimateTokens(content),
+        promptTokens: chatResult.usage.prompt_tokens || estimateTokens(content),
       completionTokens: assistantTokens,
       totalTokens,
       creditsUsed,
@@ -303,11 +308,11 @@ apiV1.post("/conversations/:id/messages", authMiddleware, zValidator("json", z.o
       message: {
         id: assistantMsgId,
         role: "assistant",
-        content: response.content,
+        content: chatResult.content,
         model: conv.model,
       },
       usage: {
-        promptTokens: response.usage?.prompt_tokens || estimateTokens(content),
+        promptTokens: chatResult.usage.prompt_tokens || estimateTokens(content),
         completionTokens: assistantTokens,
         totalTokens,
         creditsUsed,
@@ -442,15 +447,19 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
       });
     }
 
-    const response = await llmService.chat(model, body.messages, {
+    const chatResult = await llmService.chat(model, body.messages, {
       temperature: body.temperature,
       maxTokens: body.max_tokens,
     });
 
+    if (!chatResult || !('usage' in chatResult)) {
+      return c.json({ error: "Failed to generate response" }, 500);
+    }
+
     const latency = Date.now() - startTime;
-    const promptTokens = response.usage?.prompt_tokens || body.messages.reduce((acc, m) => acc + estimateTokens(m.content), 0);
-    const completionTokens = response.usage?.completion_tokens || estimateTokens(response.content);
-    const totalTokens = response.usage?.total_tokens || (promptTokens + completionTokens);
+    const promptTokens = chatResult.usage.prompt_tokens || body.messages.reduce((acc, m) => acc + (m.content ? estimateTokens(m.content) : 0), 0);
+    const completionTokens = chatResult.usage.completion_tokens || estimateTokens(chatResult.content);
+    const totalTokens = chatResult.usage.total_tokens || (promptTokens + completionTokens);
     const creditsUsed = Math.ceil(totalTokens * (TOKEN_COSTS[model]?.output || 0.2));
 
     if (user.tier === "free") {
@@ -480,7 +489,7 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
       model: body.model,
       choices: [{
         index: 0,
-        message: { role: "assistant", content: response.content },
+        message: { role: "assistant", content: chatResult.content },
         finish_reason: "stop",
       }],
       usage: {

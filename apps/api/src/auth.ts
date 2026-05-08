@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { getCookie, setCookie } from "hono/cookie";
 import { Lucia, TimeSpan } from "lucia";
 import { DrizzlePostgreSQLAdapter } from "@lucia-auth/adapter-drizzle";
 import { Google } from "arctic";
@@ -20,7 +21,7 @@ export const lucia = new Lucia(adapter, {
     },
   },
   sessionExpiresIn: new TimeSpan(30, "d"),
-  getUserAttributes: (attributes) => ({
+  getUserAttributes: (attributes: any) => ({
     id: attributes.id,
     email: attributes.email,
     name: attributes.name,
@@ -78,10 +79,10 @@ auth.get("/google", async (c) => {
   }
   const state = generateId();
   const codeVerifier = generateId();
-  const url = await google.createAuthorizationURL(state, codeVerifier, ["openid", "profile", "email"]);
+  const url = await google.createAuthorizationURL(state, codeVerifier);
 
-  c.header("Set-Cookie", `google_oauth_state=${state}; HttpOnly; SameSite=Lax; Max-Age=600`, { append: true });
-  c.header("Set-Cookie", `google_code_verifier=${codeVerifier}; HttpOnly; SameSite=Lax; Max-Age=600`, { append: true });
+  setCookie(c, "google_oauth_state", state, { httpOnly: true, sameSite: "Lax", maxAge: 600 });
+  setCookie(c, "google_code_verifier", codeVerifier, { httpOnly: true, sameSite: "Lax", maxAge: 600 });
 
   return c.redirect(url.toString());
 });
@@ -93,8 +94,8 @@ auth.get("/google/callback", async (c) => {
   }
   const code = c.req.query("code");
   const state = c.req.query("state");
-  const storedState = c.req.cookie("google_oauth_state");
-  const storedCodeVerifier = c.req.cookie("google_code_verifier");
+  const storedState = getCookie(c, "google_oauth_state");
+  const storedCodeVerifier = getCookie(c, "google_code_verifier");
 
   if (!code || !state || !storedState || state !== storedState || !storedCodeVerifier) {
     return c.json({ error: "Invalid OAuth state" }, 400);
