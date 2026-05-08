@@ -292,11 +292,10 @@ apiV1.post("/conversations/:id/messages", authMiddleware, zValidator("json", z.o
     }
 
     await db.insert(usageLogs).values({
-      id: generateId(),
       userId: user.id,
       model: conv.model,
       provider: "phoenix",
-        promptTokens: chatResult.usage.prompt_tokens || estimateTokens(content),
+      promptTokens: chatResult.usage.prompt_tokens || estimateTokens(content),
       completionTokens: assistantTokens,
       totalTokens,
       creditsUsed,
@@ -320,7 +319,6 @@ apiV1.post("/conversations/:id/messages", authMiddleware, zValidator("json", z.o
     });
   } catch (error: any) {
     await db.insert(usageLogs).values({
-      id: generateId(),
       userId: user.id,
       model: conv.model,
       provider: "phoenix",
@@ -432,7 +430,6 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
         }
 
         await db.insert(usageLogs).values({
-          id: generateId(),
           userId: user.id,
           apiKeyId: apiKeyId || null,
           model,
@@ -469,7 +466,6 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
     }
 
     await db.insert(usageLogs).values({
-      id: generateId(),
       userId: user.id,
       apiKeyId: apiKeyId || null,
       model,
@@ -500,7 +496,6 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
     });
   } catch (error: any) {
     await db.insert(usageLogs).values({
-      id: generateId(),
       userId: user.id,
       apiKeyId: apiKeyId || null,
       model,
