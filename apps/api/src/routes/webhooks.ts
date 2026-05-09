@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@phoenix/database";
 import { payments, users } from "@phoenix/database";
-import { PaystackService } from "../services/paystack";
+import { PaystackService } from "../services/paystack.js";
 
 const webhookRoutes = new Hono();
 

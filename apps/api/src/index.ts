@@ -8,10 +8,10 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-import { auth } from "./auth";
-import { apiV1 } from "./routes/v1";
-import { webhookRoutes } from "./routes/webhooks";
-import { adminRoutes } from "./routes/admin";
+import { auth } from "./auth.js";
+import { apiV1 } from "./routes/v1.js";
+import { webhookRoutes } from "./routes/webhooks.js";
+import { adminRoutes } from "./routes/admin.js";
 
 const app = new Hono();
 

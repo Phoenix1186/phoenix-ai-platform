@@ -5,10 +5,10 @@ import { z } from "zod";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { db } from "@phoenix/database";
 import { users, conversations, messages, apiKeys, payments, usageLogs } from "@phoenix/database";
-import { lucia } from "../auth";
+import { lucia } from "../auth.js";
 import { generateId, estimateTokens } from "@phoenix/shared";
-import { LLMService, SELF_HOSTED_MODELS, TOKEN_COSTS } from "../services/llm";
-import { PaystackService } from "../services/paystack";
+import { LLMService, SELF_HOSTED_MODELS, TOKEN_COSTS } from "../services/llm.js";
+import { PaystackService } from "../services/paystack.js";
 
 const apiV1 = new Hono<{ Variables: ContextVariables }>();
 
@@ -71,7 +71,7 @@ apiV1.get("/models", async (c) => {
   const llm = new LLMService();
   const installedModels = await llm.listModels();
 
-  const models = SELF_HOSTED_MODELS.map(m => {
+  const models = SELF_HOSTED_MODELS.map((m: any) => {
     const installed = installedModels.find((im: any) => im.name.includes(m.id));
     return {
       id: m.id,
@@ -334,94 +334,46 @@ apiV1.post("/conversations/:id/messages", authMiddleware, zValidator("json", z.o
   }
 });
 
-// ============ CHAT COMPLETIONS (OpenAI-compatible) ============
+// ============ CHAT COMPLETIONS (OpenAI Compatible) ============
 apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
   model: z.string(),
   messages: z.array(z.object({
     role: z.enum(["user", "assistant", "system"]),
     content: z.string(),
   })),
-  temperature: z.number().min(0).max(2).optional().default(0.7),
-  max_tokens: z.number().optional(),
   stream: z.boolean().optional().default(false),
-  top_p: z.number().optional(),
-  frequency_penalty: z.number().optional(),
-  presence_penalty: z.number().optional(),
+  temperature: z.number().optional().default(0.7),
 })), async (c) => {
   const user = c.get("user") as User;
   const body = c.req.valid("json");
-  const apiKeyId = c.get("apiKeyId");
+  const llmService = new LLMService();
+  const startTime = Date.now();
 
   if (user.credits <= 0 && user.tier === "free") {
     return c.json({ error: { message: "Insufficient credits", type: "insufficient_credits" } }, 402);
   }
 
-  const model = body.model;
-  const llmService = new LLMService();
-  const startTime = Date.now();
-
   try {
     if (body.stream) {
-      c.header("Content-Type", "text/event-stream");
-      c.header("Cache-Control", "no-cache");
-      c.header("Connection", "keep-alive");
-
-      const streamBody = await llmService.streamChat(model, body.messages, {
-        temperature: body.temperature,
-        maxTokens: body.max_tokens,
-      });
-
-      if (!streamBody) {
-        return c.json({ error: "Stream failed" }, 500);
-      }
-
       return stream(c, async (stream) => {
-        const reader = (streamBody as ReadableStream).getReader();
-        const decoder = new TextDecoder();
         let fullContent = "";
+        const chatStream = await llmService.streamChat(body.model, body.messages, {
+          temperature: body.temperature,
+        }) as any;
+          
 
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value);
-            const lines = chunk.split("\n").filter(line => line.trim());
-
-            for (const line of lines) {
-              try {
-                const data = JSON.parse(line);
-                if (data.message?.content) {
-                  fullContent += data.message.content;
-                  const sseData = {
-                    id: `chatcmpl-${generateId()}`,
-                    object: "chat.completion.chunk",
-                    created: Math.floor(Date.now() / 1000),
-                    model,
-                    choices: [{
-                      index: 0,
-                      delta: { content: data.message.content },
-                      finish_reason: data.done ? "stop" : null,
-                    }],
-                  };
-                  await stream.write(`data: ${JSON.stringify(sseData)}\n\n`);
-                }
-              } catch {
-                // Skip invalid JSON lines
-              }
-            }
+        for await (const chunk of chatStream) {
+          if (chunk.choices[0]?.delta?.content) {
+            fullContent += chunk.choices[0].delta.content;
           }
-        } finally {
-          reader.releaseLock();
+          await stream.write(`data: ${JSON.stringify(chunk)}\n\n`);
         }
 
-        await stream.write("data: [DONE]\n\n");
-
-        // Log usage after stream completes
-        const promptTokens = body.messages.reduce((acc, m) => acc + estimateTokens(m.content), 0);
-        const completionTokens = estimateTokens(fullContent);
-        const totalTokens = promptTokens + completionTokens;
-        const creditsUsed = Math.ceil(totalTokens * (TOKEN_COSTS[model]?.output || 0.2));
+        const latency = Date.now() - startTime;
+        const promptTokens = body.messages.reduce((acc, m) => acc + (m.content ? estimateTokens(m.content) : 0), 0);
+        const assistantTokens = estimateTokens(fullContent);
+        const totalTokens = promptTokens + assistantTokens;
+        const creditsUsed = Math.ceil(totalTokens * (TOKEN_COSTS[body.model]?.output || 0.2));
 
         if (user.tier === "free") {
           await db.update(users)
@@ -431,33 +383,32 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
 
         await db.insert(usageLogs).values({
           userId: user.id,
-          apiKeyId: apiKeyId || null,
-          model,
+          model: body.model,
           provider: "phoenix",
           promptTokens,
-          completionTokens,
+          completionTokens: assistantTokens,
           totalTokens,
           creditsUsed,
-          latency: Date.now() - startTime,
+          latency,
           status: "success",
         });
+
+        await stream.write("data: [DONE]\n\n");
       });
     }
 
-    const chatResult = await llmService.chat(model, body.messages, {
+    const chatResult = await llmService.chat(body.model, body.messages, {
       temperature: body.temperature,
-      maxTokens: body.max_tokens,
     });
 
     if (!chatResult || !('usage' in chatResult)) {
-      return c.json({ error: "Failed to generate response" }, 500);
+      throw new Error("Failed to generate response");
     }
 
     const latency = Date.now() - startTime;
-    const promptTokens = chatResult.usage.prompt_tokens || body.messages.reduce((acc, m) => acc + (m.content ? estimateTokens(m.content) : 0), 0);
-    const completionTokens = chatResult.usage.completion_tokens || estimateTokens(chatResult.content);
-    const totalTokens = chatResult.usage.total_tokens || (promptTokens + completionTokens);
-    const creditsUsed = Math.ceil(totalTokens * (TOKEN_COSTS[model]?.output || 0.2));
+    const assistantTokens = chatResult.usage.completion_tokens || estimateTokens(chatResult.content);
+    const totalTokens = chatResult.usage.total_tokens || (chatResult.usage.prompt_tokens + assistantTokens);
+    const creditsUsed = Math.ceil(totalTokens * (TOKEN_COSTS[body.model]?.output || 0.2));
 
     if (user.tier === "free") {
       await db.update(users)
@@ -467,11 +418,10 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
 
     await db.insert(usageLogs).values({
       userId: user.id,
-      apiKeyId: apiKeyId || null,
-      model,
+      model: body.model,
       provider: "phoenix",
-      promptTokens,
-      completionTokens,
+      promptTokens: chatResult.usage.prompt_tokens,
+      completionTokens: assistantTokens,
       totalTokens,
       creditsUsed,
       latency,
@@ -485,20 +435,22 @@ apiV1.post("/chat/completions", apiKeyMiddleware, zValidator("json", z.object({
       model: body.model,
       choices: [{
         index: 0,
-        message: { role: "assistant", content: chatResult.content },
+        message: {
+          role: "assistant",
+          content: chatResult.content,
+        },
         finish_reason: "stop",
       }],
       usage: {
-        prompt_tokens: promptTokens,
-        completion_tokens: completionTokens,
+        prompt_tokens: chatResult.usage.prompt_tokens,
+        completion_tokens: assistantTokens,
         total_tokens: totalTokens,
       },
     });
   } catch (error: any) {
     await db.insert(usageLogs).values({
       userId: user.id,
-      apiKeyId: apiKeyId || null,
-      model,
+      model: body.model,
       provider: "phoenix",
       promptTokens: body.messages.reduce((acc, m) => acc + (m.content ? estimateTokens(m.content) : 0), 0),
       completionTokens: 0,
@@ -528,7 +480,7 @@ apiV1.post("/embeddings", apiKeyMiddleware, zValidator("json", z.object({
 
     return c.json({
       object: "list",
-      data: embeddings.map((embedding, i) => ({
+      data: embeddings.map((embedding: any, i: number) => ({
         object: "embedding",
         index: i,
         embedding,
@@ -548,7 +500,7 @@ apiV1.post("/payments/initialize", authMiddleware, zValidator("json", z.object({
   const { packageId } = c.req.valid("json");
 
   const { CREDIT_PACKAGES } = await import("@phoenix/shared");
-  const pkg = CREDIT_PACKAGES.find(p => p.id === packageId);
+  const pkg = (CREDIT_PACKAGES as any[]).find((p: any) => p.id === packageId);
   if (!pkg) return c.json({ error: "Invalid package" }, 400);
 
   const paystack = new PaystackService();
